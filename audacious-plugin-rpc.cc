@@ -1,4 +1,4 @@
-#include <ctime>
+#include <iostream>
 #include <string.h>
 
 #include <libaudcore/drct.h>
@@ -11,6 +11,7 @@
 #include <libaudcore/runtime.h>
 
 #include <discord_rpc.h>
+#include <cstdint>
 
 #define EXPORT __attribute__((visibility("default")))
 #define CFG_SECTION "audacious-plugin-rpc"
@@ -60,22 +61,28 @@ struct RPCPlugin::Metadata {
 
 EXPORT RPCPlugin aud_plugin_instance;
 
+DiscordEventHandlers handlers;
 DiscordRichPresence presence;
+std::string title;
+std::string titleText;
+std::string artist;
+std::string artistText;
+std::string album;
+std::string albumText;
+std::string playingStatus;
+std::int64_t length;
+std::int64_t timestamp;
 
 void RPCPlugin::init_discord() {
-    DiscordEventHandlers handlers;
-
     memset(&handlers, 0, sizeof(handlers));
     Discord_Initialize(APPLICATION_ID, &handlers, 0, NULL);
 }
 
 void RPCPlugin::update_presence() {
-    AUDINFO("Updating Discord presence\n");
     Discord_UpdatePresence(&presence);
 }
 
 void RPCPlugin::init_presence() {
-    AUDINFO("Initializing Discord presence\n");
     memset(&presence, 0, sizeof(presence));
         presence.type = DiscordActivityType_Listening;
     presence.startTimestamp = time(NULL);
@@ -83,74 +90,87 @@ void RPCPlugin::init_presence() {
 }
 
 void RPCPlugin::cleanup_discord() {
-    AUDINFO("Shutting down Discord presence\n");
     Discord_ClearPresence();
     Discord_Shutdown();
 }
 
 void RPCPlugin::title_changed() {
-    Metadata meta;
+    bool hideCurrentSong = aud_get_bool(CFG_SECTION, SETTING_HIDE_STATUS);
+    std::string activityType(aud_get_str(CFG_SECTION, SETTING_STATUS_TYPE));
+    bool showProgressBar = aud_get_bool(CFG_SECTION, SETTING_SHOW_PROGRESS);
+
     if (aud_drct_get_ready() && aud_drct_get_playing()) {
-        Tuple tuple = aud_drct_get_tuple();
-
-        meta.title = tuple.get_str(Tuple::Title);
-        meta.artist = tuple.get_str(Tuple::Artist);
-        meta.album = tuple.get_str(Tuple::Album);
-        meta.length = tuple.get_int(Tuple::Length);
-        meta.timestamp = (meta.length / 1000) - (aud_drct_get_time() / 1000);
-
-        bool hideCurrentSong = aud_get_bool(CFG_SECTION, SETTING_HIDE_STATUS);
-        String activityType = aud_get_str(CFG_SECTION, SETTING_STATUS_TYPE);
-        bool showProgressBar = aud_get_bool(CFG_SECTION, SETTING_SHOW_PROGRESS);
-
         bool paused = aud_drct_get_paused();
         bool shuffle = aud_get_bool("shuffle") || aud_get_bool("album_shuffle");
         bool no_advance = aud_get_bool("no_playlist_advance");
-        meta.playingStatus = String(paused ? "Paused" : meta.length == -1 ? "Listening" : no_advance ? "Looping" : shuffle ? "Shuffling" : "Listening");
+        Tuple tuple = aud_drct_get_tuple();
+        title = tuple.get_str(Tuple::Title);
+        
+        titleText = title.substr(0, 128);
+
+        String artistString = tuple.get_str(Tuple::Artist);
+        if(artistString) {
+            artist = tuple.get_str(Tuple::Artist);
+            artistText = artist.append(" ").substr(0, 128);
+        } else {
+            artistText = "";
+        }
+        
+        String albumString = tuple.get_str(Tuple::Album);
+        if(albumString) {
+            album = tuple.get_str(Tuple::Album);
+            albumText = album.append(" ").substr(0, 128);
+        } else {
+            albumText = "";
+        }
+
+        length = tuple.get_int(Tuple::Length);
+        timestamp = (length / 1000) - (aud_drct_get_time() / 1000);
+
+        playingStatus = paused ? "Paused" : length == -1 ? "Listening" : no_advance ? "Looping" : shuffle ? "Shuffling" : "Listening";
 
         if(hideCurrentSong) {
             presence.details = "";
-            presence.state = strdup(meta.playingStatus);
+            presence.state = playingStatus.c_str();
             presence.largeImageText = "";
             presence.status_display_type = DiscordStatusDisplayType_Name;
-        } else {
-            presence.details = strdup(meta.title);
-            presence.state = strdup(meta.artist);
-            presence.largeImageText = strdup(meta.album);
-            presence.smallImageText = strdup(meta.playingStatus);
+        }
+        else {
+            presence.details = titleText.c_str();
+            presence.state = artistText.c_str();
+            presence.largeImageText = albumText.c_str();
 
-            if(meta.artist && activityType == String("state"))
+            if(artistString && activityType == "state")
                 presence.status_display_type = DiscordStatusDisplayType_State;
-            else if(activityType == String("details"))
+            else if(activityType == "details")
                 presence.status_display_type = DiscordStatusDisplayType_Details;
             else
                 presence.status_display_type = DiscordStatusDisplayType_Name;
         }
 
-        
-        presence.smallImageKey = paused ? "pause" : meta.length == -1 ? "play" : no_advance ? "repeat_song" : shuffle ? "shuffle" : "play";
+        presence.smallImageKey = paused ? "pause" : length == -1 ? "play" : no_advance ? "repeat_song" : shuffle ? "shuffle" : "play";
 
         presence.startTimestamp = paused ? time(NULL) : (time(NULL) - aud_drct_get_time() / 1000);
         if(hideCurrentSong && !showProgressBar)
             presence.endTimestamp = 0;
         else
-            presence.endTimestamp = (paused || meta.length == -1) ? 0 : time(NULL) + meta.timestamp;
+            presence.endTimestamp = (paused || length == -1) ? 0 : time(NULL) + timestamp;
         
-        presence.largeImageKey = "logo";
-        update_presence();
+        presence.largeImageKey = "";
     } else {
-        // default presence details
+        playingStatus = "Stopped";
         presence.details = "";
         presence.state = "Stopped";
         presence.status_display_type = DiscordStatusDisplayType_Name;
         presence.largeImageText = "";
         presence.largeImageKey = "logo";
         presence.smallImageKey = "stop";
-        presence.smallImageText = "Stopped";
         presence.startTimestamp = time(NULL);
         presence.endTimestamp = 0;
-        update_presence();
     }
+    
+    presence.smallImageText = playingStatus.c_str();
+    update_presence();
 }
 
 void RPCPlugin::update_title_presence(void*, void*) {
