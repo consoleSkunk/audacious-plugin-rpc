@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.12)
+cmake_minimum_required(VERSION 3.10)
 project(audacious-rpc)
 
 # General options
@@ -6,7 +6,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Finding Audacious
 include(FindPkgConfig)
-PKG_SEARCH_MODULE(AUDACIOUS REQUIRED audacious>=3.9)
+pkg_search_module(AUDACIOUS REQUIRED audacious>=3.9)
 add_definitions(${AUDACIOUS_CFLAGS})
 
 # Building discord-rpc
@@ -32,7 +32,7 @@ message("${discord-rpc_SOURCE_DIR}/include")
 target_include_directories(audacious-plugin-rpc PRIVATE "${discord-rpc_SOURCE_DIR}/include")
 
 # Installing RPC plugin
-PKG_GET_VARIABLE(AUDACIOUS_PLUGIN_DIR audacious plugin_dir)
+pkg_get_variable(AUDACIOUS_PLUGIN_DIR audacious plugin_dir)
 set(INSTALL_DIR "${AUDACIOUS_PLUGIN_DIR}/General")
 
 install(TARGETS audacious-plugin-rpc LIBRARY DESTINATION ${INSTALL_DIR})

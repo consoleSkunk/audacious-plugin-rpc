@@ -1,4 +1,4 @@
-#include <iostream>
+#include <ctime>
 #include <string.h>
 
 #include <libaudcore/drct.h>
@@ -11,18 +11,21 @@
 #include <libaudcore/runtime.h>
 
 #include <discord_rpc.h>
-#include <cstdint>
 
 #define EXPORT __attribute__((visibility("default")))
-#define APPLICATION_ID "484736379171897344"
+#define CFG_SECTION "audacious-plugin-rpc"
+#define APPLICATION_ID "1277415022707998730"
+#define SOURCE_REPOSITORY "https://github.com/consoleSkunk/audacious-plugin-rpc"
 
-static const char *SETTING_EXTRA_TEXT = "extra_text";
-static const char *SETTING_USE_PLAYING = "use_playing_status";
+static const char *SETTING_STATUS_TYPE = "status_display_type";
+static const char *SETTING_HIDE_STATUS = "hide_current_song";
+static const char *SETTING_SHOW_PROGRESS = "show_progress_bar";
 
 class RPCPlugin : public GeneralPlugin {
 
 public:
     static const char about[];
+    static const char * const defaults[];
     static const PreferencesWidget widgets[];
     static const PluginPreferences prefs;
 
@@ -37,122 +40,125 @@ public:
 
     bool init();
     void cleanup();
+
+private:
+    struct Metadata;
+    static void init_discord();
+    static void update_presence();
+    static void init_presence();
+    static void cleanup_discord();
+    static void title_changed();
+    static void update_title_presence(void*, void*);
+    static const ComboItem status_display_types[];
+    static const PreferencesWidget privacy_settings[];
+};
+
+struct RPCPlugin::Metadata {
+    String title, artist, album, playingStatus;
+    int64_t length, timestamp;
 };
 
 EXPORT RPCPlugin aud_plugin_instance;
 
-DiscordEventHandlers handlers;
 DiscordRichPresence presence;
-std::string title;
-std::string titleText;
-std::string fullTitle;
-std::string artist;
-std::string artistText;
-std::string album;
-std::string albumText;
-std::string state;
-std::string playingStatus;
-std::int64_t length;
-std::int64_t timestamp;
 
-void init_discord() {
+void RPCPlugin::init_discord() {
+    DiscordEventHandlers handlers;
+
     memset(&handlers, 0, sizeof(handlers));
-    Discord_Initialize(APPLICATION_ID, &handlers, 1, NULL);
+    Discord_Initialize(APPLICATION_ID, &handlers, 0, NULL);
 }
 
-void update_presence() {
+void RPCPlugin::update_presence() {
+    AUDINFO("Updating Discord presence\n");
     Discord_UpdatePresence(&presence);
 }
 
-void init_presence() {
+void RPCPlugin::init_presence() {
+    AUDINFO("Initializing Discord presence\n");
     memset(&presence, 0, sizeof(presence));
-    if(!aud_get_bool("audacious-plugin-rpc", SETTING_USE_PLAYING))
         presence.type = DiscordActivityType_Listening;
     presence.startTimestamp = time(NULL);
     update_presence();
 }
 
-void cleanup_discord() {
+void RPCPlugin::cleanup_discord() {
+    AUDINFO("Shutting down Discord presence\n");
     Discord_ClearPresence();
     Discord_Shutdown();
 }
 
-void title_changed() {
-    if(aud_get_bool("audacious-plugin-rpc", SETTING_USE_PLAYING))
-        presence.type = DiscordActivityType_Playing;
-    else
-        presence.type = DiscordActivityType_Listening;
-    presence.largeImageKey = "logo";
-
+void RPCPlugin::title_changed() {
+    Metadata meta;
     if (aud_drct_get_ready() && aud_drct_get_playing()) {
-        bool paused = aud_drct_get_paused();
         Tuple tuple = aud_drct_get_tuple();
-        title = tuple.get_str(Tuple::Title);
-        
-        titleText = title.substr(0, 127);
 
-        String artistString = tuple.get_str(Tuple::Artist);
-        if(artistString) {
-            artist = tuple.get_str(Tuple::Artist);
-            artistText = artist.substr(0, 127);
-            fullTitle = (title + " - " + artist).substr(0, 127);
-        } else {
-            fullTitle = title.substr(0, 127);
-            artistText = "";
-        }
-        
-        String albumString = tuple.get_str(Tuple::Album);
-        if(albumString) {
-            album = tuple.get_str(Tuple::Album);
-            albumText = album.substr(0, 127);
-        } else {
-            albumText = "";
-        }
+        meta.title = tuple.get_str(Tuple::Title);
+        meta.artist = tuple.get_str(Tuple::Artist);
+        meta.album = tuple.get_str(Tuple::Album);
+        meta.length = tuple.get_int(Tuple::Length);
+        meta.timestamp = (meta.length / 1000) - (aud_drct_get_time() / 1000);
 
-        length = tuple.get_int(Tuple::Length);
-        timestamp = (length / 1000) - (aud_drct_get_time() / 1000);
+        bool hideCurrentSong = aud_get_bool(CFG_SECTION, SETTING_HIDE_STATUS);
+        String activityType = aud_get_str(CFG_SECTION, SETTING_STATUS_TYPE);
+        bool showProgressBar = aud_get_bool(CFG_SECTION, SETTING_SHOW_PROGRESS);
 
-        playingStatus = paused ? "Paused" : "Listening";
+        bool paused = aud_drct_get_paused();
+        bool shuffle = aud_get_bool("shuffle") || aud_get_bool("album_shuffle");
+        bool no_advance = aud_get_bool("no_playlist_advance");
+        meta.playingStatus = String(paused ? "Paused" : meta.length == -1 ? "Listening" : no_advance ? "Looping" : shuffle ? "Shuffling" : "Listening");
 
-        if(aud_get_bool("audacious-plugin-rpc", SETTING_USE_PLAYING)) {
-            presence.details = fullTitle.c_str();
-            presence.state = albumText.c_str();
+        if(hideCurrentSong) {
+            presence.details = "";
+            presence.state = strdup(meta.playingStatus);
             presence.largeImageText = "";
+            presence.status_display_type = DiscordStatusDisplayType_Name;
         } else {
-            presence.details = titleText.c_str();
-            presence.state = artistText.c_str();
-            presence.largeImageText = albumText.c_str();
+            presence.details = strdup(meta.title);
+            presence.state = strdup(meta.artist);
+            presence.largeImageText = strdup(meta.album);
+            presence.smallImageText = strdup(meta.playingStatus);
+
+            if(meta.artist && activityType == String("state"))
+                presence.status_display_type = DiscordStatusDisplayType_State;
+            else if(activityType == String("details"))
+                presence.status_display_type = DiscordStatusDisplayType_Details;
+            else
+                presence.status_display_type = DiscordStatusDisplayType_Name;
         }
 
-        presence.smallImageKey = paused ? "pause" : "play";
-        presence.startTimestamp = paused ? 0 : (time(NULL) - aud_drct_get_time() / 1000);
-        presence.endTimestamp = (paused || length == -1) ? 0 : time(NULL) + timestamp;
-    } else {
-        playingStatus = "Stopped";
-        presence.details = "Stopped";
-        presence.state = "";
-        presence.largeImageText = "";
-        presence.smallImageKey = "stop";
-        presence.startTimestamp = 0;
-        presence.endTimestamp = 0;
-    }
+        
+        presence.smallImageKey = paused ? "pause" : meta.length == -1 ? "play" : no_advance ? "repeat_song" : shuffle ? "shuffle" : "play";
 
-    std::string extraText(aud_get_str("audacious-plugin-rpc", SETTING_EXTRA_TEXT));
-    playingStatus = (playingStatus + " " + extraText).substr(0, 127);
-    
-    presence.smallImageText = playingStatus.c_str();
-    update_presence();
+        presence.startTimestamp = paused ? time(NULL) : (time(NULL) - aud_drct_get_time() / 1000);
+        if(hideCurrentSong && !showProgressBar)
+            presence.endTimestamp = 0;
+        else
+            presence.endTimestamp = (paused || meta.length == -1) ? 0 : time(NULL) + meta.timestamp;
+        
+        presence.largeImageKey = "logo";
+        update_presence();
+    } else {
+        // default presence details
+        presence.details = "";
+        presence.state = "Stopped";
+        presence.status_display_type = DiscordStatusDisplayType_Name;
+        presence.largeImageText = "";
+        presence.largeImageKey = "logo";
+        presence.smallImageKey = "stop";
+        presence.smallImageText = "Stopped";
+        presence.startTimestamp = time(NULL);
+        presence.endTimestamp = 0;
+        update_presence();
+    }
 }
 
-void update_title_presence(void*, void*) {
+void RPCPlugin::update_title_presence(void*, void*) {
     title_changed();
 }
 
-void open_github() {
-   system("xdg-open https://github.com/darktohka/audacious-plugin-rpc");
-}
-
 bool RPCPlugin::init() {
+    aud_config_set_defaults(CFG_SECTION, defaults);
     init_discord();
     init_presence();
     hook_associate("playback ready", update_title_presence, nullptr);
@@ -161,6 +167,8 @@ bool RPCPlugin::init() {
     hook_associate("playback unpause", update_title_presence, nullptr);
     hook_associate("playback seek", update_title_presence, nullptr);
     hook_associate("playlist end reached", update_title_presence, nullptr);
+    hook_associate ("set shuffle", update_title_presence, nullptr);
+    hook_associate ("set no_playlist_advance", update_title_presence, nullptr);
     hook_associate("title change", update_title_presence, nullptr);
     return true;
 }
@@ -172,26 +180,54 @@ void RPCPlugin::cleanup() {
     hook_dissociate("playback unpause", update_title_presence);
     hook_dissociate("playback seek", update_title_presence);
     hook_dissociate("playlist end reached", update_title_presence);
+    hook_dissociate("set shuffle", update_title_presence);
+    hook_dissociate("set no_playlist_advance", update_title_presence);
     hook_dissociate("title change", update_title_presence);
     cleanup_discord();
 }
 
-const char RPCPlugin::about[] = N_("Discord RPC music status plugin\n\nWritten by: Derzsi Daniel <daniel@tohka.us>");
+const char RPCPlugin::about[] = N_(
+    "Discord RPC music status plugin\n\n"
+    "Copyright (c) 2025 Derzsi Dániel <daniel@tohka.us>\n"
+    "Copyright (c) 2025 consoleSkunk\n\n"
+    SOURCE_REPOSITORY
+);
+
+const char * const RPCPlugin::defaults[] = {
+    "extra_text", "",
+    "status_display_type", "state",
+    "hide_current_song", "FALSE",
+    "show_progress_bar", "TRUE",
+    nullptr
+};
+
+const ComboItem RPCPlugin::status_display_types[] = {
+    ComboItem (N_("Audacious"), "name"),
+    ComboItem ("Track title", "details"),
+    ComboItem ("Artist name", "state")
+};
+
+const PreferencesWidget RPCPlugin::privacy_settings[] = {
+  WidgetCheck(
+      N_("Display progress bar"),
+      WidgetBool(CFG_SECTION, SETTING_SHOW_PROGRESS, title_changed)
+  ),
+};
 
 const PreferencesWidget RPCPlugin::widgets[] =
 {
-  WidgetEntry(
-      N_("Extra status text:"),
-      WidgetString("audacious-plugin-rpc", SETTING_EXTRA_TEXT, title_changed)
+  WidgetLabel (N_("<b>General</b>")),
+  WidgetCombo(
+      N_("Status display text:"),
+      WidgetString (CFG_SECTION, SETTING_STATUS_TYPE, title_changed),
+      {{status_display_types}}
   ),
+  WidgetLabel (N_("<b>Privacy</b>")),
   WidgetCheck(
-      N_("Use \"Playing\" status"),
-      WidgetBool("audacious-plugin-rpc", SETTING_USE_PLAYING, title_changed)
+      N_("Hide current song"),
+      WidgetBool(CFG_SECTION, SETTING_HIDE_STATUS, title_changed)
   ),
-  WidgetButton(
-      N_("Fork on GitHub"),
-      {open_github}
-  )
+  WidgetBox ({{privacy_settings}}, WIDGET_CHILD)
 };
 
 const PluginPreferences RPCPlugin::prefs = {{ widgets }};
