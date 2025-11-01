@@ -48,12 +48,12 @@ void RPCPlugin::init_discord() {
 }
 
 void RPCPlugin::update_presence() {
-    AUDINFO("Updating Discord presence");
+    AUDINFO("Updating Discord presence\n");
     Discord_UpdatePresence(&presence);
 }
 
 void RPCPlugin::init_presence() {
-    AUDINFO("Initializing Discord presence");
+    AUDINFO("Initializing Discord presence\n");
     memset(&presence, 0, sizeof(presence));
         presence.type = DiscordActivityType_Listening;
     presence.startTimestamp = time(NULL);
@@ -61,7 +61,7 @@ void RPCPlugin::init_presence() {
 }
 
 void RPCPlugin::cleanup_discord() {
-    AUDINFO("Cleaning up Discord presence");
+    AUDINFO("Cleaning up Discord presence\n");
     Discord_ClearPresence();
     Discord_Shutdown();
 }
