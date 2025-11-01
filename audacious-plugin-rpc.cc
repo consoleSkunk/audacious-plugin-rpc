@@ -22,6 +22,8 @@
 static const char *SETTING_STATUS_TYPE = "status_display_type";
 static const char *SETTING_HIDE_STATUS = "hide_current_song";
 static const char *SETTING_SHOW_PROGRESS = "show_progress_bar";
+static const char *SETTING_HIDE_PAUSED = "hide_when_paused";
+static const char *SETTING_HIDE_STATE = "hide_playback_state";
 
 class RPCPlugin : public GeneralPlugin {
 
@@ -92,13 +94,21 @@ void RPCPlugin::cleanup_discord() {
 
 void RPCPlugin::title_changed() {
     bool hideCurrentSong = aud_get_bool(CFG_SECTION, SETTING_HIDE_STATUS);
-    std::string activityType(aud_get_str(CFG_SECTION, SETTING_STATUS_TYPE));
     bool showProgressBar = aud_get_bool(CFG_SECTION, SETTING_SHOW_PROGRESS);
+    bool hidePaused = aud_get_bool(CFG_SECTION, SETTING_HIDE_PAUSED);
+    bool hidePlaybackState = aud_get_bool(CFG_SECTION, SETTING_HIDE_STATE);
+    std::string activityType(aud_get_str(CFG_SECTION, SETTING_STATUS_TYPE));
 
     if (aud_drct_get_ready() && aud_drct_get_playing()) {
         bool paused = aud_drct_get_paused();
         bool shuffle = aud_get_bool("shuffle") || aud_get_bool("album_shuffle");
         bool no_advance = aud_get_bool("no_playlist_advance");
+        
+        if(paused && hidePaused) {
+            Discord_ClearPresence();
+            return;
+        }
+
         Tuple tuple = aud_drct_get_tuple();
         title = tuple.get_str(Tuple::Title);
         
@@ -123,7 +133,13 @@ void RPCPlugin::title_changed() {
         length = tuple.get_int(Tuple::Length);
         timestamp = (length / 1000) - (aud_drct_get_time() / 1000);
 
-        playingStatus = paused ? "Paused" : length == -1 ? "Listening" : no_advance ? "Looping" : shuffle ? "Shuffling" : "Listening";
+        if(!hidePlaybackState) {
+            playingStatus = paused ? "Paused" : length == -1 ? "Listening" : no_advance ? "Looping" : shuffle ? "Shuffling" : "Listening";
+            presence.smallImageKey = paused ? "pause" : length == -1 ? "play" : no_advance ? "repeat_song" : shuffle ? "shuffle" : hideCurrentSong ? "play" : "";
+        } else {
+            playingStatus = "";
+            presence.smallImageKey = "";
+        }
 
         if(hideCurrentSong) {
             presence.details = "";
@@ -146,8 +162,6 @@ void RPCPlugin::title_changed() {
                 presence.status_display_type = DiscordStatusDisplayType_Name;
         }
 
-        presence.smallImageKey = paused ? "pause" : length == -1 ? "play" : no_advance ? "repeat_song" : shuffle ? "shuffle" : hideCurrentSong ? "play" : "";
-
         presence.startTimestamp = paused ? time(NULL) : (time(NULL) - aud_drct_get_time() / 1000);
         if(hideCurrentSong && !showProgressBar)
             presence.endTimestamp = 0;
@@ -156,6 +170,10 @@ void RPCPlugin::title_changed() {
         
         presence.largeImageKey = "";
     } else {
+        if(hidePaused) {
+            Discord_ClearPresence();
+            return;
+        }
         playingStatus = "Stopped";
         presence.details = "";
         presence.state = "Stopped";
@@ -214,6 +232,8 @@ const char * const RPCPlugin::defaults[] = {
     SETTING_STATUS_TYPE, "state",
     SETTING_HIDE_STATUS, "FALSE",
     SETTING_SHOW_PROGRESS, "TRUE",
+    SETTING_HIDE_PAUSED, "FALSE",
+    SETTING_HIDE_STATE, "FALSE",
     nullptr
 };
 
@@ -243,7 +263,15 @@ const PreferencesWidget RPCPlugin::widgets[] =
       N_("Hide current song"),
       WidgetBool(CFG_SECTION, SETTING_HIDE_STATUS, title_changed)
   ),
-  WidgetBox ({{privacy_settings}}, WIDGET_CHILD)
+  WidgetBox ({{privacy_settings}}, WIDGET_CHILD),
+  WidgetCheck(
+      N_("Hide presence while paused"),
+      WidgetBool(CFG_SECTION, SETTING_HIDE_PAUSED, title_changed)
+  ),
+  WidgetCheck(
+      N_("Hide playback icon"),
+      WidgetBool(CFG_SECTION, SETTING_HIDE_STATE, title_changed)
+  ),
 };
 
 const PluginPreferences RPCPlugin::prefs = {{ widgets }};
