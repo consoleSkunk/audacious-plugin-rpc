@@ -1,5 +1,6 @@
 #include <iostream>
 #include <string.h>
+#include <cstdint>
 
 #include <libaudcore/drct.h>
 #include <libaudcore/i18n.h>
@@ -54,21 +55,13 @@ private:
     static const PreferencesWidget privacy_settings[];
 };
 
-struct RPCPlugin::Metadata {
-    String title, artist, album, playingStatus;
-    int64_t length, timestamp;
-};
-
 EXPORT RPCPlugin aud_plugin_instance;
 
 DiscordEventHandlers handlers;
 DiscordRichPresence presence;
-std::string title;
-std::string titleText;
-std::string artist;
-std::string artistText;
-std::string album;
-std::string albumText;
+std::string title, titleText;
+std::string artist, artistText;
+std::string album, albumText;
 std::string playingStatus;
 std::int64_t length;
 std::int64_t timestamp;
@@ -79,10 +72,12 @@ void RPCPlugin::init_discord() {
 }
 
 void RPCPlugin::update_presence() {
+    AUDINFO("Updating Discord presence");
     Discord_UpdatePresence(&presence);
 }
 
 void RPCPlugin::init_presence() {
+    AUDINFO("Initializing Discord presence");
     memset(&presence, 0, sizeof(presence));
         presence.type = DiscordActivityType_Listening;
     presence.startTimestamp = time(NULL);
@@ -90,6 +85,7 @@ void RPCPlugin::init_presence() {
 }
 
 void RPCPlugin::cleanup_discord() {
+    AUDINFO("Cleaning up Discord presence");
     Discord_ClearPresence();
     Discord_Shutdown();
 }
@@ -106,7 +102,7 @@ void RPCPlugin::title_changed() {
         Tuple tuple = aud_drct_get_tuple();
         title = tuple.get_str(Tuple::Title);
         
-        titleText = title.substr(0, 128);
+        titleText = title.append(" ").substr(0, 128);
 
         String artistString = tuple.get_str(Tuple::Artist);
         if(artistString) {
@@ -132,6 +128,7 @@ void RPCPlugin::title_changed() {
         if(hideCurrentSong) {
             presence.details = "";
             presence.state = playingStatus.c_str();
+            presence.smallImageText = playingStatus.c_str();
             presence.largeImageText = "";
             presence.status_display_type = DiscordStatusDisplayType_Name;
         }
@@ -139,6 +136,7 @@ void RPCPlugin::title_changed() {
             presence.details = titleText.c_str();
             presence.state = artistText.c_str();
             presence.largeImageText = albumText.c_str();
+            presence.smallImageText = playingStatus.c_str();
 
             if(artistString && activityType == "state")
                 presence.status_display_type = DiscordStatusDisplayType_State;
@@ -148,7 +146,7 @@ void RPCPlugin::title_changed() {
                 presence.status_display_type = DiscordStatusDisplayType_Name;
         }
 
-        presence.smallImageKey = paused ? "pause" : length == -1 ? "play" : no_advance ? "repeat_song" : shuffle ? "shuffle" : "play";
+        presence.smallImageKey = paused ? "pause" : length == -1 ? "play" : no_advance ? "repeat_song" : shuffle ? "shuffle" : hideCurrentSong ? "play" : "";
 
         presence.startTimestamp = paused ? time(NULL) : (time(NULL) - aud_drct_get_time() / 1000);
         if(hideCurrentSong && !showProgressBar)
@@ -169,7 +167,6 @@ void RPCPlugin::title_changed() {
         presence.endTimestamp = 0;
     }
     
-    presence.smallImageText = playingStatus.c_str();
     update_presence();
 }
 
@@ -214,10 +211,9 @@ const char RPCPlugin::about[] = N_(
 );
 
 const char * const RPCPlugin::defaults[] = {
-    "extra_text", "",
-    "status_display_type", "state",
-    "hide_current_song", "FALSE",
-    "show_progress_bar", "TRUE",
+    SETTING_STATUS_TYPE, "state",
+    SETTING_HIDE_STATUS, "FALSE",
+    SETTING_SHOW_PROGRESS, "TRUE",
     nullptr
 };
 
